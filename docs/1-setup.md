@@ -29,16 +29,14 @@
 1. Установите программу `Raspberry Pi Imager` для скачивания и прошивки образа
 
 Ubuntu
-
 ```
+TODO
 ```
 
 ArchLinux
-
 ```
 sudo pacman -S rpi-imager
 ```
-
 2. Подключите MicroSD картук компьютеру
 3. Запустите `Rasberry Pi Imager`. 
 4. Нажмите `Choose OS` -> `Rasberry Pi OS (other)` -> `Rasberry Pi OS Lite`
@@ -53,18 +51,17 @@ sudo pacman -S rpi-imager
 1. Для включения SSH, создайте пустой файл с названием `<rootfs>/boot/ssh` . При первой загрузке RPI включит SSH сервер, если обнаружит такой файл
 2. Варианта А: настройка WiFi
    Для настройки подключения к WiFi, создайте файл `<rootfs>/boot/wpa_supplicant.conf`  со следующим содерджимом:
-
-```
-country=RU
-ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
-update_config=1
-
-network={
-scan_ssid=1
-ssid="your_wifi_ssid"
-psk="your_wifi_password"
-}
-```
+   ```
+   country=RU
+   ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+   update_config=1
+   
+   network={
+   scan_ssid=1
+   ssid="your_wifi_ssid"
+   psk="your_wifi_password"
+   }
+   ```
 
 3. Варианта B: настройка проводной сети
    TODO
@@ -76,26 +73,39 @@ psk="your_wifi_password"
 3. Подождите, чтобы RPI загрузился, обычно, хватает минуты, возможно, певрый запуск несколько дольше
    RPI должна быть доступна по хостнейму `raspberrypi`. Если она не доступна по хостнейму -  щито поделать. Попробуйте посмотреть в настройках роутера список клиентов WiFi. Попробуейте подключиться по проводной сети
 4. Подключение к RPI
-
-```
-ssh pi@raspberry
-```
-Данные для входа
-```
-hostname: raspberrypi
-username: pi
-password: raspberry
-```
-
-Вы должны увидеть шелл (командную оболочку) RPI
-
-```
-pi@raspberrypi: ~ $
-```
+   ```
+   ssh pi@raspberry
+   ```
+   Данные для входа
+   ```
+   hostname: raspberrypi
+   username: pi
+   password: raspberry
+   ```
+   Вы должны увидеть шелл (командную оболочку) RPI
+   ```
+   pi@raspberrypi: ~ $
+   ```
 
 Теперь вы можете подключаться к RPI по SSH, выполнять различные команды, а также передавать файлы в обе стороны по SCP.
 
-## Referencespi
+## 4. Password-less connection
+Чтобы не вводить пароль при каждом подключении и передаче файлов к RPI, необходимо настроить подключение по ключу.
+
+1. Сгенерируйте ключ. На все вопросы утилиты можно нажимать Enter
+   ``` 
+   ssh-keygen
+   ```
+   В результате, будет сгенерирована пара приватного `~/.ssh/id_rsa` и публичного `~/.ssh/id_rsa.pub` ключей
+
+2. Теперь необходимо установить публичный ключ на RPI. Проще всего это сделать командой
+
+   ```
+   ssh-copy-id pi@raspberrypi
+   ```
+
+
+## References
 
 1. [Setting up a headless Raspberry Pi](https://jacobian.org/2021/jan/22/headless-rpi/)
 2. [How to Set Up a Headless Raspberry Pi, Without Ever Attaching a Monitor](https://www.tomshardware.com/reviews/raspberry-pi-headless-setup-how-to,6028.html). Более детальная инструкция с картинками
