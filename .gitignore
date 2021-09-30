@@ -1,0 +1,14 @@
+build/
+dist/
+*.cache/
+
+# Kernel module build artifacts
+*.o
+*.o.*
+*.ko
+*.ko.*
+*.cmd
+*.symvers
+*.order
+*.mod
+*.mod.*
