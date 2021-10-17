@@ -1,21 +1,35 @@
 #include <linux/module.h>
 #include <linux/module.h>
 #include <linux/fs.h>
-#include <linux/device.h>
-#include <linux/cdev.h>
+#include <linux/miscdevice.h>
 
-#define DEVICE_NAME     "rpi_led%d"         /* Название файла в /dev */
-#define CLASS_NAME      "rpi_led_class"     /* Название класса драйвера */
-#define MAX_MINOR_CNT   1                   /* Количество девайсов, создаваемых драйвером */
+#define DEVICE_NAME     "rpi_led"         /* Название файла в /dev */
 
-/* Структура для хранения данных драйвера */
-struct rpi_device_data {
-    struct cdev cdev;                       /* Структура, описывающая символьное устройство */
+static int rpi_open(struct inode *inode, struct file *file);
+static int rpi_release(struct inode *inode, struct file *file);
+static ssize_t rpi_write(struct file *file, const char __user *buffer,
+    size_t count, loff_t *offp);
+
+
+/* Структура с указателями функции работы с файлами, которые мы реализовали.
+   По-сути, это описание того, как мы наследлвали интерфейс */
+static const struct file_operations fops = {
+    .owner = THIS_MODULE,
+    .open = rpi_open,
+    .release = rpi_release,
+    .write = rpi_write,
 };
 
-static dev_t rpi_devno;                     /* Номер устройства */
-static struct class* rpi_class;             /* Класс драйвера. Нужен для создания устройств в /dev */
-static struct rpi_device_data rpi_device;   /* Данные драйвера */
+/* Структура, описывающая "miscellaneous device". Это упрощенная версия символьного
+   устройства для простых драйверов, которые не относятся к какому-то конкретному
+   классу устройств (т.е. "прочее"). misc device автоматически создает inode
+   в /dev, без необходимости вручную регистрировать major и minor номера устройства
+*/
+static struct miscdevice rpi_miscdevice = {
+    .minor = MISC_DYNAMIC_MINOR,
+    .name  = DEVICE_NAME,
+    .fops  = &fops
+};
 
 /* Драйверы реализуются аналогично реализации интерфейса, только на Си. Линукс
    имеет ряд стандартных типо драйверов, а мы должны подготовить соответствующие
@@ -93,96 +107,19 @@ static ssize_t rpi_write(struct file *file, const char __user *buffer,
     return count;
 }
 
-/* Структура с указателями функции работы с файлами, которые мы реализовали.
-   По-сути, это описание того, как мы наследлвали интерфейс */
-static const struct file_operations fops = {
-    .owner = THIS_MODULE,
-    .open = rpi_open,
-    .release = rpi_release,
-    .write = rpi_write,
-};
-
-/**
- * @brief Создает устройство
- * @param devno  номер устройства (должен быть уиникальный)
- * @param data   указатель на нашу структуру данных устройства
- * @retval       0 - успех, < 0 - ошибка
- */
-static int rpi_create_dev(dev_t devno, struct rpi_device_data *data)
-{
-    int ret;
-    struct device *device;
-
-    pr_info("Creating device %d.%d\n", MAJOR(devno), MINOR(devno));
-
-    /* Создаем character device, указываем для него наши file operations */
-    cdev_init(&data->cdev, &fops);
-    ret = cdev_add(&data->cdev, devno, 1);
-    if (ret < 0) {
-        pr_err("Failed to add cdev\n");
-        goto err;
-    }
-
-    /* Создаем файл (inode) в /dev/ */
-    device = device_create(rpi_class, NULL, devno, NULL, DEVICE_NAME, MINOR(devno));
-    if (IS_ERR(device)) {
-        pr_err("Failed to create device\n");
-        goto del_cdev;
-    }
-
-    return 0;
-
-del_cdev:
-    cdev_del(&data->cdev);
-err:
-    return -1;
-}
-
-/**
- * @brief Удаляет устройство
- * @param devno  номер устройства (должен быть уиникальный)
- * @param data   указатель на нашу структуру данных устройства
- */
-static void rpi_delete_dev(dev_t devno, struct rpi_device_data *data)
-{
-    device_destroy(rpi_class, devno);
-    cdev_del(&data->cdev);
-}
-
-
 /* Функция вызывается при инициализации модуля */
 static int __init rpi_led_init(void)
 {
     int ret;
 
-    /* Выделяем диапазон уникальных номеров для устройств */
-    ret = alloc_chrdev_region(&rpi_devno, 0, MAX_MINOR_CNT, DEVICE_NAME);
+    ret = misc_register(&rpi_miscdevice);
     if (ret != 0) {
-        pr_err("Unable to allocate chrdev region: %d\n", ret);
+        pr_err("Failed to register misc device\n");
         goto err;
-    }
-
-    /* Регистрируем класс (нужен потом для создания устройств в /dev) */
-    rpi_class = class_create(THIS_MODULE, CLASS_NAME);
-    if (IS_ERR(rpi_class)) {
-        pr_err("Failed to create  device class\n");
-        goto del_region;
-    }
-
-    /* Создаем устройство */
-    ret = rpi_create_dev(rpi_devno, &rpi_device);
-    if (ret < 0) {
-        goto del_class;
     }
 
     pr_info("Driver loaded\n");
     return 0;
-
-    /* Если что-то пошло не так, подчищаем за собой */
-del_class:
-   class_destroy(rpi_class);
-del_region:
-   unregister_chrdev_region(rpi_devno, MAX_MINOR_CNT);
 err:
     return -1;
 }
@@ -190,10 +127,7 @@ err:
 /* Фнкция вызывается при деинициализации модуля модуля */
 static void __exit rpi_led_exit(void)
 {
-    rpi_delete_dev(rpi_devno, &rpi_device);
-    class_destroy(rpi_class);
-    unregister_chrdev_region(rpi_devno, MAX_MINOR_CNT);
-
+    misc_deregister(&rpi_miscdevice);
     pr_info("Driver unloaded\n");
 }
 
