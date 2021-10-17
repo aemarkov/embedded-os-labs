@@ -1,7 +1,11 @@
+#include "linux/export.h"
 #include <linux/module.h>
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/miscdevice.h>
+#include <linux/gpio/consumer.h>
+#include <linux/platform_device.h>
+#include <linux/mod_devicetable.h>
 
 #define DEVICE_NAME     "rpi_led"         /* Название файла в /dev */
 
@@ -10,6 +14,8 @@ static int rpi_release(struct inode *inode, struct file *file);
 static ssize_t rpi_write(struct file *file, const char __user *buffer,
     size_t count, loff_t *offp);
 
+static int __init rpi_led_probe(struct platform_device *pdev);
+static int __exit rpi_led_remove(struct platform_device *pdev);
 
 /* Структура с указателями функции работы с файлами, которые мы реализовали.
    По-сути, это описание того, как мы наследлвали интерфейс */
@@ -30,6 +36,27 @@ static struct miscdevice rpi_miscdevice = {
     .name  = DEVICE_NAME,
     .fops  = &fops
 };
+
+/* Список устройств в Device Tree, которые совместимы с нашим драйвером.
+   Если соответствующее устройство будет обнаружено, наш драйвер будет загружен
+*/
+static const struct of_device_id supported_devices[] = {
+     {.compatible = "rpi-tarsov-expansion"},
+     {}
+};
+MODULE_DEVICE_TABLE(of, supported_devices);
+
+/* Структура, описывающая platform device driver */
+static struct platform_driver rpi_led_platform_driver = {
+    .probe = rpi_led_probe,                     /* Функция, которая вызывается при загрузке */
+    .remove = rpi_led_remove,                   /* Функция, которая вызывается при удалении */
+    .driver = {
+        .name = DEVICE_NAME,                    /* Фиг его знает... */
+        .of_match_table = supported_devices,    /* Список поддерживаемых устройств */
+        .owner = THIS_MODULE
+    }
+};
+
 
 /* Драйверы реализуются аналогично реализации интерфейса, только на Си. Линукс
    имеет ряд стандартных типо драйверов, а мы должны подготовить соответствующие
@@ -107,8 +134,8 @@ static ssize_t rpi_write(struct file *file, const char __user *buffer,
     return count;
 }
 
-/* Функция вызывается при инициализации модуля */
-static int __init rpi_led_init(void)
+/* Инициализация драйвера */
+static int rpi_driver_init(void)
 {
     int ret;
 
@@ -118,21 +145,37 @@ static int __init rpi_led_init(void)
         goto err;
     }
 
-    pr_info("Driver loaded\n");
+    pr_info("Driver initialized\n");
     return 0;
 err:
     return -1;
 }
 
-/* Фнкция вызывается при деинициализации модуля модуля */
-static void __exit rpi_led_exit(void)
+/* Деинициализация драйвера */
+static void rpi_driver_deinit(void)
 {
     misc_deregister(&rpi_miscdevice);
-    pr_info("Driver unloaded\n");
+    pr_info("Driver deinitialized\n");
 }
 
-module_init(rpi_led_init);
-module_exit(rpi_led_exit);
+/* Функция вызывается, когда подходящее устройство обнаружено */
+static int __init rpi_led_probe(struct platform_device *pdev)
+{
+    pr_info("Driver probed\n");
+    rpi_driver_init();
+    return 0;
+}
+
+/* Функция вызывается, когда устройство удалено, либо драйвер выгружен */
+static int __exit rpi_led_remove(struct platform_device *pdev)
+{
+    pr_info("Driver is removing\n");
+    rpi_driver_deinit();
+    return 0;
+}
+
+/* Регистрация platform device driver */
+module_platform_driver(rpi_led_platform_driver);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Markov Alexey <markovalex95@gmail.com>");
