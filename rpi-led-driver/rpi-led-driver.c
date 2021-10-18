@@ -17,6 +17,8 @@ static ssize_t rpi_write(struct file *file, const char __user *buffer,
 static int __init rpi_led_probe(struct platform_device *pdev);
 static int __exit rpi_led_remove(struct platform_device *pdev);
 
+static void rpi_driver_deinit(void);
+
 /* Структура с указателями функции работы с файлами, которые мы реализовали.
    По-сути, это описание того, как мы наследлвали интерфейс */
 static const struct file_operations fops = {
@@ -57,6 +59,10 @@ static struct platform_driver rpi_led_platform_driver = {
     }
 };
 
+/* Дескрипторы GPIO-пинов, которые мы получили из Device Tree и которые используется
+   для управления пинами
+*/
+struct gpio_descs *gpios;
 
 /* Драйверы реализуются аналогично реализации интерфейса, только на Си. Линукс
    имеет ряд стандартных типо драйверов, а мы должны подготовить соответствующие
@@ -76,6 +82,45 @@ static struct platform_driver rpi_led_platform_driver = {
      диск
 */
 
+/* Выключает все пины */
+void rpi_gpio_disable(void)
+{
+    unsigned long values;
+
+    if (gpios == NULL) {
+        pr_err("gpios isn't initialized\n");
+        return;
+    }
+
+    /* Записываем битмаску (все нули) в пины */
+    values = 0;
+    gpiod_set_array_value(gpios->ndescs, gpios->desc, gpios->info, &values);
+}
+
+/* Включает пин с заданным индексом, выключает остальные */
+void rpi_gpio_set(unsigned index)
+{
+    unsigned long values;
+
+    if (gpios == NULL) {
+        pr_err("gpios isn't initialized\n");
+        return;
+    }
+
+    if (index >= gpios->ndescs) {
+        pr_err("GPIO index %u is out of range\n", index);
+        return;
+    }
+
+    /* Записываем битмаску (все нули) в пины, чтобы выключить уже включенные*/
+    values = 0;
+    gpiod_set_array_value(gpios->ndescs, gpios->desc, gpios->info, &values);
+
+    /* Записываем битмаску, в которой установлен только бит с заданным индексом*/
+    values = (1 << index);
+    gpiod_set_array_value(gpios->ndescs, gpios->desc, gpios->info, &values);
+
+}
 /**
  * @brief Функция вызывается при открытии файла устройства
  * @param inode
@@ -130,30 +175,43 @@ static ssize_t rpi_write(struct file *file, const char __user *buffer,
     }
 
     pr_info("Led: %u\n", led);
+    rpi_gpio_set(led);
 
     return count;
 }
 
 /* Инициализация драйвера */
-static int rpi_driver_init(void)
+static int rpi_driver_init(struct platform_device *pdev)
 {
     int ret;
+
+    gpios= gpiod_get_array(&pdev->dev, "led", GPIOD_OUT_LOW);
+    if (gpios == NULL || IS_ERR(gpios)) {
+        pr_err("Failed to get GPIO");
+        goto err;
+    }
 
     ret = misc_register(&rpi_miscdevice);
     if (ret != 0) {
         pr_err("Failed to register misc device\n");
-        goto err;
+        goto deinit_gpio;
     }
 
     pr_info("Driver initialized\n");
+
     return 0;
+deinit_gpio:
+    gpiod_put_array(gpios);
 err:
+    pr_err("Failed to initialize driver\n");
     return -1;
 }
 
 /* Деинициализация драйвера */
 static void rpi_driver_deinit(void)
 {
+    rpi_gpio_disable();
+    gpiod_put_array(gpios);
     misc_deregister(&rpi_miscdevice);
     pr_info("Driver deinitialized\n");
 }
@@ -162,8 +220,7 @@ static void rpi_driver_deinit(void)
 static int __init rpi_led_probe(struct platform_device *pdev)
 {
     pr_info("Driver probed\n");
-    rpi_driver_init();
-    return 0;
+    return rpi_driver_init(pdev);
 }
 
 /* Функция вызывается, когда устройство удалено, либо драйвер выгружен */
