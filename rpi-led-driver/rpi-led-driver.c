@@ -43,7 +43,7 @@ static struct miscdevice rpi_miscdevice = {
    Если соответствующее устройство будет обнаружено, наш драйвер будет загружен
 */
 static const struct of_device_id supported_devices[] = {
-     {.compatible = "rpi-tarsov-expansion"},
+     {.compatible = "tarasov-expansion-gpio"},
      {}
 };
 MODULE_DEVICE_TABLE(of, supported_devices);
@@ -185,9 +185,9 @@ static int rpi_driver_init(struct platform_device *pdev)
 {
     int ret;
 
-    gpios= gpiod_get_array(&pdev->dev, "led", GPIOD_OUT_LOW);
+    gpios= gpiod_get_array(&pdev->dev, "leds", GPIOD_OUT_LOW);
     if (gpios == NULL || IS_ERR(gpios)) {
-        pr_err("Failed to get GPIO");
+        pr_err("Failed to get GPIO: %d\n", (int)gpios);
         goto err;
     }
 
