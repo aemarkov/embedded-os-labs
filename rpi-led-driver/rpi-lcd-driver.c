@@ -1,3 +1,4 @@
+#include "linux/err.h"
 #include "linux/export.h"
 #include <linux/module.h>
 #include <linux/module.h>
@@ -7,15 +8,19 @@
 #include <linux/platform_device.h>
 #include <linux/mod_devicetable.h>
 
-#define DEVICE_NAME     "rpi_led"         /* Название файла в /dev */
+#include "lcd-hd44780.h"
+
+#define DEVICE_NAME     "rpi_lcd"         /* Название файла в /dev */
+
+#define IS_ERR_OR_NULL(value) (IS_ERR((value)) || (value) == NULL)
 
 static int rpi_open(struct inode *inode, struct file *file);
 static int rpi_release(struct inode *inode, struct file *file);
 static ssize_t rpi_write(struct file *file, const char __user *buffer,
     size_t count, loff_t *offp);
 
-static int __init rpi_led_probe(struct platform_device *pdev);
-static int __exit rpi_led_remove(struct platform_device *pdev);
+static int __init rpi_lcd_probe(struct platform_device *pdev);
+static int __exit rpi_lcd_remove(struct platform_device *pdev);
 
 static void rpi_driver_deinit(void);
 
@@ -43,16 +48,15 @@ static struct miscdevice rpi_miscdevice = {
    Если соответствующее устройство будет обнаружено, наш драйвер будет загружен
 */
 static const struct of_device_id supported_devices[] = {
-     // {.compatible = "tarasov-expansion-gpio"},
      {.compatible = "tarasov-expansion-lcd"},
      {}
 };
 MODULE_DEVICE_TABLE(of, supported_devices);
 
 /* Структура, описывающая platform device driver */
-static struct platform_driver rpi_led_platform_driver = {
-    .probe = rpi_led_probe,                     /* Функция, которая вызывается при загрузке */
-    .remove = rpi_led_remove,                   /* Функция, которая вызывается при удалении */
+static struct platform_driver rpi_lcd_platform_driver = {
+    .probe = rpi_lcd_probe,                     /* Функция, которая вызывается при загрузке */
+    .remove = rpi_lcd_remove,                   /* Функция, которая вызывается при удалении */
     .driver = {
         .name = DEVICE_NAME,                    /* Фиг его знает... */
         .of_match_table = supported_devices,    /* Список поддерживаемых устройств */
@@ -60,10 +64,7 @@ static struct platform_driver rpi_led_platform_driver = {
     }
 };
 
-/* Дескрипторы GPIO-пинов, которые мы получили из Device Tree и которые используется
-   для управления пинами
-*/
-struct gpio_descs *gpios;
+struct lcd_4470 lcd;
 
 /* Драйверы реализуются аналогично реализации интерфейса, только на Си. Линукс
    имеет ряд стандартных типо драйверов, а мы должны подготовить соответствующие
@@ -83,45 +84,6 @@ struct gpio_descs *gpios;
      диск
 */
 
-/* Выключает все пины */
-void rpi_gpio_disable(void)
-{
-    unsigned long values;
-
-    if (gpios == NULL) {
-        pr_err("gpios isn't initialized\n");
-        return;
-    }
-
-    /* Записываем битмаску (все нули) в пины */
-    values = 0;
-    gpiod_set_array_value(gpios->ndescs, gpios->desc, gpios->info, &values);
-}
-
-/* Включает пин с заданным индексом, выключает остальные */
-void rpi_gpio_set(unsigned index)
-{
-    unsigned long values;
-
-    if (gpios == NULL) {
-        pr_err("gpios isn't initialized\n");
-        return;
-    }
-
-    if (index >= gpios->ndescs) {
-        pr_err("GPIO index %u is out of range\n", index);
-        return;
-    }
-
-    /* Записываем битмаску (все нули) в пины, чтобы выключить уже включенные*/
-    values = 0;
-    gpiod_set_array_value(gpios->ndescs, gpios->desc, gpios->info, &values);
-
-    /* Записываем битмаску, в которой установлен только бит с заданным индексом*/
-    values = (1 << index);
-    gpiod_set_array_value(gpios->ndescs, gpios->desc, gpios->info, &values);
-
-}
 /**
  * @brief Функция вызывается при открытии файла устройства
  * @param inode
@@ -156,29 +118,45 @@ static int rpi_release(struct inode *inode, struct file *file)
 static ssize_t rpi_write(struct file *file, const char __user *buffer,
     size_t count, loff_t *offp)
 {
-    int ret;
-    u8 led;
+    return -EINVAL;
+}
 
-    pr_info("write count=%zu, offp=%lld\n", count, *offp);
+static void rpi_deinit_pins()
+{
+    if (!IS_ERR_OR_NULL(lcd.pins.rs)) {
+        gpiod_put(lcd.pins.rs);
+    }
+    if (!IS_ERR_OR_NULL(lcd.pins.rw)) {
+        gpiod_put(lcd.pins.rw);
+    }
+    if (!IS_ERR_OR_NULL(lcd.pins.en)) {
+        gpiod_put(lcd.pins.en);
+    }
+    if (!IS_ERR_OR_NULL(lcd.pins.data)) {
+        gpiod_put_array(lcd.pins.data);
+    }
+}
 
-    /* Для упрощения, не поддерживаем смещение, т.е. несколько последовательных
-       записей и всякие lseek */
-    if (*offp != 0) {
-        pr_err("This driver doesn't support offset\n");
-        return -EINVAL;
+static int rpi_get_pins(struct platform_device *pdev)
+{
+    struct device *device = &pdev->dev;
+    lcd.pins.rs = gpiod_get(device, "rs", GPIOD_OUT_LOW);
+    lcd.pins.rw = gpiod_get(device, "rw", GPIOD_OUT_LOW);
+    lcd.pins.en = gpiod_get(device, "en", GPIOD_OUT_LOW);
+    lcd.pins.data = gpiod_get_array(device, "data", GPIOD_OUT_LOW);
+
+    if (IS_ERR_OR_NULL(lcd.pins.rs) ||
+        IS_ERR_OR_NULL(lcd.pins.rw) ||
+        IS_ERR_OR_NULL(lcd.pins.en) ||
+        IS_ERR_OR_NULL(lcd.pins.data)) {
+        pr_err("Failed to get LCD pins\n");
+        goto err;
     }
 
-    /* Парсим строку в число */
-    ret = kstrtou8_from_user(buffer, count, 10, &led);
-    if (ret != 0) {
-        pr_err("Invalid data\n");
-        return -EINVAL;
-    }
-
-    pr_info("Led: %u\n", led);
-    rpi_gpio_set(led);
-
-    return count;
+    return 0;
+err:
+    rpi_deinit_pins();
+    return -1;
 }
 
 /* Инициализация драйвера */
@@ -186,9 +164,7 @@ static int rpi_driver_init(struct platform_device *pdev)
 {
     int ret;
 
-    gpios= gpiod_get_array(&pdev->dev, "leds", GPIOD_OUT_LOW);
-    if (gpios == NULL || IS_ERR(gpios)) {
-        pr_err("Failed to get GPIO: %d\n", (int)gpios);
+    if (rpi_get_pins(pdev) != 0) {
         goto err;
     }
 
@@ -202,7 +178,7 @@ static int rpi_driver_init(struct platform_device *pdev)
 
     return 0;
 deinit_gpio:
-    gpiod_put_array(gpios);
+    rpi_deinit_pins();
 err:
     pr_err("Failed to initialize driver\n");
     return -1;
@@ -211,31 +187,42 @@ err:
 /* Деинициализация драйвера */
 static void rpi_driver_deinit(void)
 {
-    rpi_gpio_disable();
-    gpiod_put_array(gpios);
+    rpi_deinit_pins();
     misc_deregister(&rpi_miscdevice);
     pr_info("Driver deinitialized\n");
 }
 
 /* Функция вызывается, когда подходящее устройство обнаружено */
-static int __init rpi_led_probe(struct platform_device *pdev)
+static int __init rpi_lcd_probe(struct platform_device *pdev)
 {
     pr_info("Driver probed\n");
     return rpi_driver_init(pdev);
 }
 
 /* Функция вызывается, когда устройство удалено, либо драйвер выгружен */
-static int __exit rpi_led_remove(struct platform_device *pdev)
+static int __exit rpi_lcd_remove(struct platform_device *pdev)
 {
     pr_info("Driver is removing\n");
     rpi_driver_deinit();
     return 0;
 }
 
-/* Регистрация platform device driver */
-module_platform_driver(rpi_led_platform_driver);
+static int __init rpi_lcd_init()
+{
+    pr_info("init\n");
+    return 0;
+}
 
+static void __exit rpi_lcd_exit()
+{
+    pr_info("exit\n");
+}
+
+/* Регистрация platform device driver */
+// module_platform_driver(rpi_lcd_platform_driver);
+module_init(rpi_lcd_init);
+module_exit(rpi_lcd_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Markov Alexey <markovalex95@gmail.com>");
 
-MODULE_DESCRIPTION("Simple test driver for Raspberry Pi");
+MODULE_DESCRIPTION("Simple LCD driver for Raspberry Pi");
